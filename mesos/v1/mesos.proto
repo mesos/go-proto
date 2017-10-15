@@ -1296,12 +1296,13 @@ message Resource {
     optional Volume volume = 2;
 
     // Describes where a disk originates from.
-    // TODO(jmlvanre): Add support for BLOCK devices.
     message Source {
       enum Type {
         UNKNOWN = 0;
         PATH = 1;
         MOUNT = 2;
+        BLOCK = 3;
+        RAW = 4;
       }
 
       // A folder that can be located on a separate disk device. This
@@ -1322,6 +1323,22 @@ message Resource {
       required Type type = 1;
       optional Path path = 2;
       optional Mount mount = 3;
+
+      // An identifier for this source. This field maps onto CSI
+      // volume IDs and is not expected to be set by frameworks.
+      optional string id = 4; // EXPERIMENTAL.
+
+      // Additional metadata for this source. This field maps onto CSI
+      // volume metadata and is not expected to be set by frameworks.
+      optional Labels metadata = 5; // EXPERIMENTAL.
+
+      // This field serves as an indirection to a set of storage
+      // vendor specific disk parameters which describe the properties
+      // of the disk. The operator will setup mappings between a
+      // profile name to a set of vendor specific disk parameters. And
+      // the framework will do disk selection based on profile names,
+      // instead of vendor specific disk parameters.
+      optional string profile = 6; // EXPERIMENTAL.
     }
 
     optional Source source = 3;
@@ -1390,15 +1407,15 @@ message TrafficControlStatistics {
 
 
 message IpStatistics {
-  optional int64 Forwarding =  1;
-  optional int64 DefaultTTL =  2;
-  optional int64 InReceives =  3;
-  optional int64 InHdrErrors =  4;
-  optional int64 InAddrErrors =  5;
-  optional int64 ForwDatagrams =  6;
+  optional int64 Forwarding = 1;
+  optional int64 DefaultTTL = 2;
+  optional int64 InReceives = 3;
+  optional int64 InHdrErrors = 4;
+  optional int64 InAddrErrors = 5;
+  optional int64 ForwDatagrams = 6;
   optional int64 InUnknownProtos = 7;
-  optional int64 InDiscards =  8;
-  optional int64 InDelivers  = 9;
+  optional int64 InDiscards = 8;
+  optional int64 InDelivers = 9;
   optional int64 OutRequests = 10;
   optional int64 OutDiscards = 11;
   optional int64 OutNoRoutes = 12;
@@ -1414,11 +1431,11 @@ message IpStatistics {
 
 message IcmpStatistics {
   optional int64 InMsgs = 1;
-  optional int64 InErrors =  2;
+  optional int64 InErrors = 2;
   optional int64 InCsumErrors = 3;
-  optional int64 InDestUnreachs =  4;
+  optional int64 InDestUnreachs = 4;
   optional int64 InTimeExcds = 5;
-  optional int64 InParmProbs =  6;
+  optional int64 InParmProbs = 6;
   optional int64 InSrcQuenchs = 7;
   optional int64 InRedirects = 8;
   optional int64 InEchos = 9;
@@ -1775,6 +1792,10 @@ message Offer {
       UNRESERVE = 3;
       CREATE = 4;
       DESTROY = 5;
+      CREATE_VOLUME = 7;
+      DESTROY_VOLUME = 8;
+      CREATE_BLOCK = 9;
+      DESTROY_BLOCK = 10;
     }
 
     // TODO(vinod): Deprecate this in favor of `LaunchGroup` below.
@@ -1811,6 +1832,23 @@ message Offer {
       repeated Resource volumes = 1;
     }
 
+    message CreateVolume {
+      required Resource source = 1;
+      required Resource.DiskInfo.Source.Type target_type = 2;
+    }
+
+    message DestroyVolume {
+      required Resource volume = 1;
+    }
+
+    message CreateBlock {
+      required Resource source = 1;
+    }
+
+    message DestroyBlock {
+      required Resource block = 1;
+    }
+
     optional Type type = 1;
     optional Launch launch = 2;
     optional LaunchGroup launch_group = 7;
@@ -1818,6 +1856,10 @@ message Offer {
     optional Unreserve unreserve = 4;
     optional Create create = 5;
     optional Destroy destroy = 6;
+    optional CreateVolume create_volume = 8;
+    optional DestroyVolume destroy_volume = 9;
+    optional CreateBlock create_block = 10;
+    optional DestroyBlock destroy_block = 11;
   }
 }
 
@@ -2064,6 +2106,18 @@ enum TaskState {
 
 
 /**
+ * Describes a resource limitation that caused a task failure.
+ */
+message TaskResourceLimitation {
+  // This field contains the resource whose limits were violated.
+  //
+  // NOTE: 'Resources' is used here because the resource may span
+  // multiple roles (e.g. `"mem(*):1;mem(role):2"`).
+  repeated Resource resources = 1;
+}
+
+
+/**
 * Describes the status of a check. Type and the corresponding field, i.e.,
 * `command` or `http` must be set. If the result of the check is not available
 * (e.g., the check timed out), these fields must contain empty messages, i.e.,
@@ -2128,9 +2182,7 @@ message TaskStatus {
   }
 
   // Detailed reason for the task status update.
-  //
-  // TODO(bmahler): Differentiate between agent removal reasons
-  // (e.g. unhealthy vs. unregistered for maintenance).
+  // Refer to docs/task-state-reasons.md for additional explanation.
   enum Reason {
     // TODO(jieyu): The default value when a caller doesn't check for
     // presence is 0 and so ideally the 0 reason is not a valid one.
@@ -2146,7 +2198,7 @@ message TaskStatus {
     REASON_EXECUTOR_REGISTRATION_TIMEOUT = 23;
     REASON_EXECUTOR_REREGISTRATION_TIMEOUT = 24;
     REASON_EXECUTOR_TERMINATED = 1;
-    REASON_EXECUTOR_UNREGISTERED = 2;
+    REASON_EXECUTOR_UNREGISTERED = 2; // No longer used.
     REASON_FRAMEWORK_REMOVED = 3;
     REASON_GC_ERROR = 4;
     REASON_INVALID_FRAMEWORKID = 5;
@@ -2157,8 +2209,10 @@ message TaskStatus {
     REASON_RESOURCES_UNKNOWN = 18;
     REASON_AGENT_DISCONNECTED = 10;
     REASON_AGENT_REMOVED = 11;
+    REASON_AGENT_REMOVED_BY_OPERATOR = 31;
     REASON_AGENT_RESTARTED = 12;
     REASON_AGENT_UNKNOWN = 13;
+    REASON_TASK_KILLED_DURING_LAUNCH = 30;
     REASON_TASK_CHECK_STATUS_UPDATED = 28;
     REASON_TASK_HEALTH_CHECK_STATUS_UPDATED = 29;
     REASON_TASK_GROUP_INVALID = 25;
@@ -2223,6 +2277,10 @@ message TaskStatus {
   // status updates for tasks running on agents that are unreachable
   // (e.g., partitioned away from the master).
   optional TimeInfo unreachable_time = 14;
+
+  // If the reason field indicates a container resource limitation,
+  // this field optionally contains additional information.
+  optional TaskResourceLimitation limitation = 16;
 }
 
 
@@ -2237,6 +2295,11 @@ message Filters {
   // SchedulerDriver::launchTasks. You MUST pass Filters with this
   // field set to change this behavior (i.e., get another offer which
   // includes unused resources sooner or later than the default).
+  //
+  // If this field is set to a number of seconds greater than 31536000
+  // (365 days), then the resources will be considered refused for 365
+  // days. If it is set to a negative number, then the default value
+  // will be used.
   optional double refuse_seconds = 1 [default = 5.0];
 }
 
@@ -2507,8 +2570,9 @@ message Volume {
       // in a backwards-compatible way. See: MESOS-4997.
       UNKNOWN = 0;
 
-      // TODO(gyliu513): Add HOST_PATH and IMAGE as volume source type.
+      // TODO(gyliu513): Add IMAGE as volume source type.
       DOCKER_VOLUME = 1;
+      HOST_PATH = 4;
       SANDBOX_PATH = 2;
       SECRET = 3;
     }
@@ -2522,6 +2586,11 @@ message Volume {
 
       // Volume driver specific options.
       optional Parameters driver_options = 3;
+    }
+
+    // Absolute path pointing to a directory or file on the host.
+    message HostPath {
+      required string path = 1;
     }
 
     // Describe a path from a container's sandbox. The container can
@@ -2552,6 +2621,7 @@ message Volume {
     // The source of the volume created by docker volume driver.
     optional DockerVolume docker_volume = 2;
 
+    optional HostPath host_path = 5;
     optional SandboxPath sandbox_path = 3;
 
     // The volume/secret isolator uses the secret-fetcher module (third-party or
@@ -2720,6 +2790,14 @@ message LinuxInfo {
   // Represents the set of capabilities that the task will
   // be executed with.
   optional CapabilityInfo effective_capabilities = 3;
+
+  // If set as 'true', the container shares the pid namespace with
+  // its parent. If the container is a top level container, it will
+  // share the pid namespace with the agent. If the container is a
+  // nested container, it will share the pid namespace with its
+  // parent container. This field will be ignored if 'namespaces/pid'
+  // isolator is not enabled.
+  optional bool share_pid_namespace = 4;
 }
 
 
@@ -3136,8 +3214,8 @@ message FileInfo {
  */
 message Device {
   message Number {
-    required uint64 major = 1;
-    required uint64 minor = 2;
+    required uint64 major_number = 1;
+    required uint64 minor_number = 2;
   }
 
   optional string path = 1;
