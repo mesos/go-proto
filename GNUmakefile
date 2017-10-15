@@ -45,15 +45,15 @@ help:
 
 .PHONY: generate
 generate:
-	@find . -name *.pb.go | xargs rm
+	@find . -name *.pb.go | xargs rm -f
 	env PATH=$$GOPATH/bin:$$PATH go generate ./...
 	@$(SED) '-es/(json=)([a-zA-Z_]+)(.*json:[^a-z]*)([a-z_]+)/\1\4\3\4/' $$(find . -name *.pb.go)
 
 .PHONY: update
 update:
 	@for f in $$(cd $(MESOS)/include/mesos/v1 && find . -name \*.proto); do \
-		mkdir -p $$(dirname v1/$$f); \
-		cp $(MESOS)/include/mesos/v1/$$f v1/$$f; \
+		mkdir -p $$(dirname mesos/v1/$$f); \
+		cp $(MESOS)/include/mesos/v1/$$f mesos/v1/$$f; \
 	done
 
 .PHONY: check
