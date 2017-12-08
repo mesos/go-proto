@@ -32,8 +32,11 @@ message Event {
     // in a backwards-compatible way. See: MESOS-4997.
     UNKNOWN = 0;
 
-    SUBSCRIBED = 1;   // See 'Subscribed' below.
-    OPERATION = 2;    // See 'Operation' below.
+    SUBSCRIBED = 1;                  // See 'Subscribed' below.
+    APPLY_OFFER_OPERATION = 2;       // See 'ApplyOfferOperation' below.
+    PUBLISH_RESOURCES = 3;           // See 'PublishResources' below.
+    ACKNOWLEDGE_OFFER_OPERATION = 4; // See 'AcknowledgeOfferOperation' below.
+    RECONCILE_OFFER_OPERATIONS = 5;  // See 'ReconcileOfferOperations' below.
   }
 
   // First event received by the resource provider when it subscribes
@@ -44,13 +47,61 @@ message Event {
 
   // Received when the master wants to send an operation to the
   // resource provider.
-  message Operation {
-    optional Offer.Operation operation = 1;
+  message ApplyOfferOperation {
+    required FrameworkID framework_id = 1;
+    required Offer.Operation info = 2;
+
+    // This is the internal UUID for the operation, which is kept
+    // independently from the framework specified operation id, which is
+    // optional.
+    required bytes operation_uuid = 3;
+
+    // Used to establish the relationship between the operation and
+    // the resources that the operation is operating on. Each resource
+    // provider will keep a resource version UUID, and change it when
+    // it believes that the resources from this resource provider are
+    // out of sync from the master's view. The master will keep track
+    // of the last known resource version UUID for each resource
+    // provider, and attach the resource version UUID in each
+    // operation it sends out. The resource provider should reject
+    // operations that have a different resource version UUID than
+    // that it maintains, because this means the operation is
+    // operating on resources that might have already been
+    // invalidated.
+    required bytes resource_version_uuid = 4;
+  }
+
+  // Received when the master wants to launch a task using resources
+  // of this resource provider.
+  message PublishResources {
+    required bytes uuid = 1;
+    repeated Resource resources = 2;
+  }
+
+  // Received when an offer operation status update is being acknowledged.
+  // Acknowledgements may be generated either by a framework or by the master.
+  message AcknowledgeOfferOperation {
+    // The UUID from the `OfferOperationStatus` being acknowledged.
+    required bytes status_uuid = 1;
+
+    // The UUID from the relevant `OfferOperation`.
+    required bytes operation_uuid = 2;
+  }
+
+  // Received when the resource provider manager wants to reconcile its view of
+  // the resource provider's offer operation state. The resource provider should
+  // generate offer operation status updates for any operation UUIDs in this
+  // message which are unknown to the resource provider.
+  message ReconcileOfferOperations {
+    repeated bytes operation_uuids = 1;
   }
 
   optional Type type = 1;
   optional Subscribed subscribed = 2;
-  optional Operation operation = 3;
+  optional ApplyOfferOperation apply_offer_operation = 3;
+  optional PublishResources publish_resources = 4;
+  optional AcknowledgeOfferOperation acknowledge_offer_operation = 5;
+  optional ReconcileOfferOperations reconcile_offer_operations = 6;
 }
 
 
@@ -62,32 +113,62 @@ message Call {
     // in a backwards-compatible way. See: MESOS-4997.
     UNKNOWN = 0;
 
-    SUBSCRIBE = 1;    // See 'Subscribe' below.
-    UPDATE = 2;       // See 'Update' below.
+    SUBSCRIBE = 1;                       // See 'Subscribe'.
+    UPDATE_OFFER_OPERATION_STATUS = 2;   // See 'UpdateOfferOperationStatus'.
+    UPDATE_STATE = 3;                    // See 'UpdateState'.
+    UPDATE_PUBLISH_RESOURCES_STATUS = 4; // See 'UpdatePublishResourcesStatus'.
   }
 
   // Request to subscribe with the master.
   message Subscribe {
     required ResourceProviderInfo resource_provider_info = 1;
-    repeated Resource resources = 2;
   }
 
   // Notify the master about the status of an operation.
-  message Update {
-    enum State {
-      // This must be the first enum value in this list, to
-      // ensure that if 'state' is not set, the default value
-      // is UNKNOWN. This enables enum values to be added
-      // in a backwards-compatible way. See: MESOS-4997.
-      UNKNOWN = 0;
+  message UpdateOfferOperationStatus {
+    required FrameworkID framework_id = 1;
+    required OfferOperationStatus status = 2;
+    optional OfferOperationStatus latest_status = 3;
 
+    // This is the internal UUID for the operation, which is kept
+    // independently from the framework specified operation id, which is
+    // optional.
+    required bytes operation_uuid = 4;
+  }
+
+  // Notify the master about the total resources and pending operations.
+  message UpdateState {
+    // This includes pending operations and those that have
+    // unacknowledged statuses.
+    repeated OfferOperation operations = 1;
+
+    // The total resources provided by this resource provider.
+    repeated Resource resources = 2;
+
+    // Used to establish the relationship between the operation and
+    // the resources that the operation is operating on. Each resource
+    // provider will keep a resource version UUID, and change it when
+    // it believes that the resources from this resource provider are
+    // out of sync from the master's view. The master will keep track
+    // of the last known resource version UUID for each resource
+    // provider, and attach the resource version UUID in each
+    // operation it sends out. The resource provider should reject
+    // operations that have a different resource version UUID than
+    // that it maintains, because this means the operation is
+    // operating on resources that might have already been
+    // invalidated.
+    required bytes resource_version_uuid = 3;
+  }
+
+  message UpdatePublishResourcesStatus {
+    enum Status {
+      UNKNOWN = 0;
       OK = 1;
       FAILED = 2;
     }
 
-    required State state = 1;
-    required Offer.Operation operation = 2;
-    repeated Resource converted_resources = 3;
+    required bytes uuid = 1;
+    required Status status = 2;
   }
 
   // Identifies who generated this call.
@@ -102,5 +183,7 @@ message Call {
 
   optional Type type = 2;
   optional Subscribe subscribe = 3;
-  optional Update update = 4;
+  optional UpdateOfferOperationStatus update_offer_operation_status = 4;
+  optional UpdateState update_state = 5;
+  optional UpdatePublishResourcesStatus update_publish_resources_status = 6;
 }
