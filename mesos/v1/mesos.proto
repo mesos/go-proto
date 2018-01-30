@@ -105,10 +105,10 @@ message ResourceProviderID {
 
 
 /**
- * A framework-generated ID to distinguish an offer operation. The ID
+ * A framework-generated ID to distinguish an operation. The ID
  * must be unique within the framework.
  */
-message OfferOperationID {
+message OperationID {
   required string value = 1;
 }
 
@@ -718,7 +718,7 @@ message ExecutorInfo {
     // 1) `command` must not be set when using a default executor.
     //
     // 2) Default executor only accepts a *single* `LAUNCH` or `LAUNCH_GROUP`
-    //    offer operation.
+    //    operation.
     //
     // 3) If `container` is set, `container.type` must be `MESOS`
     //    and `container.mesos.image` must not be set.
@@ -731,12 +731,12 @@ message ExecutorInfo {
   }
 
   // For backwards compatibility, if this field is not set when using `LAUNCH`
-  // offer operation, Mesos will infer the type by checking if `command` is
-  // set (`CUSTOM`) or unset (`DEFAULT`). `type` must be set when using
-  // `LAUNCH_GROUP` offer operation.
+  // operation, Mesos will infer the type by checking if `command` is set
+  // (`CUSTOM`) or unset (`DEFAULT`). `type` must be set when using
+  // `LAUNCH_GROUP` operation.
   //
-  // TODO(vinod): Add support for explicitly setting `type` to `DEFAULT `
-  // in `LAUNCH` offer operation.
+  // TODO(vinod): Add support for explicitly setting `type` to `DEFAULT` in
+  // `LAUNCH` operation.
   optional Type type = 15;
 
   required ExecutorID executor_id = 1;
@@ -983,7 +983,7 @@ message AgentInfo {
       // (1) The ability to report resources that are provided by some
       //     local resource providers through the resource provider API.
       //
-      // (2) The ability to provide offer operations feedback.
+      // (2) The ability to provide operation feedback.
       RESOURCE_PROVIDER = 4;
     }
 
@@ -1032,7 +1032,7 @@ message CSIPluginInfo {
 
   // A list of container configurations to run CSI plugin components.
   // The controller service will be served by the first configuration
-  // that containers `CONTROLLER_SERVICE`, and the node service will be
+  // that contains `CONTROLLER_SERVICE`, and the node service will be
   // served by the first configuration that contains `NODE_SERVICE`.
   repeated CSIPluginContainerInfo containers = 3;
 }
@@ -1066,7 +1066,7 @@ message ResourceProviderInfo {
   // The stack of default reservations. If this field is not empty, it
   // indicates that resources from this resource provider are reserved
   // by default, except for the resources that have been reserved or
-  // unreserved through offer operations. The first `ReservationInfo`
+  // unreserved through operations. The first `ReservationInfo`
   // may have type `STATIC` or `DYNAMIC`, but the rest must have
   // `DYNAMIC`. One can create a new reservation on top of an existing
   // one by pushing a new `ReservationInfo` to the back. The last
@@ -1300,13 +1300,12 @@ message Resource {
   //       a reservation that refines the previous `ReservationInfo`.
 
   message ReservationInfo {
-    // TODO(mpark): Explain the two resource formats.
-
     // Describes a reservation. A static reservation is set by the operator on
     // the command-line and they are immutable without agent restart. A dynamic
-    // reservation is acquired by an operator via the '/reserve' HTTP endpoint
+    // reservation is made by an operator via the '/reserve' HTTP endpoint
     // or by a framework via the offer cycle by sending back an
     // 'Offer::Operation::Reserve' message.
+    //
     // NOTE: We currently do not allow frameworks with role "*" to make dynamic
     // reservations.
 
@@ -1317,11 +1316,15 @@ message Resource {
     }
 
     // The type of this reservation.
+    //
     // NOTE: This field must not be set for `Resource.reservation`.
+    //       See the 'Resource Format' section for more details.
     optional Type type = 4;
 
     // The role to which this reservation is made for.
+    //
     // NOTE: This field must not be set for `Resource.reservation`.
+    //       See the 'Resource Format' section for more details.
     optional string role = 3;
 
     // Indicates the principal, if any, of the framework or operator
@@ -1344,7 +1347,11 @@ message Resource {
   // If this is set, this resource was dynamically reserved by an
   // operator or a framework. Otherwise, this resource is either unreserved
   // or statically reserved by an operator via the --resources flag.
+  //
   // NOTE: Frameworks must not set this field if `reservations` is set.
+  //       See the 'Resource Format' section for more details.
+  //
+  // TODO(mpark): Deprecate once `reservations` is no longer experimental.
   optional ReservationInfo reservation = 8;
 
   // The stack of reservations. If this field is empty, it indicates that this
@@ -1354,7 +1361,11 @@ message Resource {
   // one by pushing a new `ReservationInfo` to the back. The last
   // `ReservationInfo` in this stack is the "current" reservation. The new
   // reservation's role must be a child of the current reservation's role.
+  //
   // NOTE: Frameworks must not set this field if `reservation` is set.
+  //       See the 'Resource Format' section for more details.
+  //
+  // TODO(mpark): Deprecate `role` and `reservation` once this is stable.
   repeated ReservationInfo reservations = 13;  // EXPERIMENTAL.
 
   message DiskInfo {
@@ -1442,6 +1453,8 @@ message Resource {
       // profile name to a set of vendor specific disk parameters. And
       // the framework will do disk selection based on profile names,
       // instead of vendor specific disk parameters.
+      //
+      // Also see the DiskProfile module.
       optional string profile = 6; // EXPERIMENTAL.
     }
 
@@ -1954,7 +1967,12 @@ message Offer {
     }
 
     optional Type type = 1;
-    optional OfferOperationID id = 12;
+
+    // NOTE: The `id` field will allow frameworks to indicate that they wish to
+    // receive feedback about an operation. Since this feature is not yet
+    // implemented, the `id` field should NOT be set at present. See MESOS-8054.
+    optional OperationID id = 12; // Experimental.
+
     optional Launch launch = 2;
     optional LaunchGroup launch_group = 7;
     optional Reserve reserve = 3;
@@ -2225,66 +2243,78 @@ message TaskResourceLimitation {
 
 
 /**
- * Describes an offer operation, similar to `Offer.Operation`, with
+ * Describes a UUID.
+ */
+message UUID {
+  required bytes value = 1;
+}
+
+
+/**
+ * Describes an operation, similar to `Offer.Operation`, with
  * some additional information.
  */
-message OfferOperation {
+message Operation {
   optional FrameworkID framework_id = 1;
   optional AgentID agent_id = 2;
   required Offer.Operation info = 3;
-  required OfferOperationStatus latest_status = 4;
+  required OperationStatus latest_status = 4;
 
-  // All the statuses known to this offer operation. Some of the
-  // statuses in this list might not have been acknowledged yet. The
-  // statuses are ordered.
-  repeated OfferOperationStatus statuses = 5;
+  // All the statuses known to this operation. Some of the statuses in this
+  // list might not have been acknowledged yet. The statuses are ordered.
+  repeated OperationStatus statuses = 5;
 
-  // This is the internal UUID for the operation, which is kept
-  // independently from the framework-specified operation ID, which is
-  // optional.
-  required bytes operation_uuid = 6;
+  // This is the internal UUID for the operation, which is kept independently
+  // from the framework-specified operation ID, which is optional.
+  required UUID uuid = 6;
 }
 
 
 /**
- * Describes possible offer operation states.
+ * Describes possible operation states.
  */
-enum OfferOperationState {
+enum OperationState {
   // Default value if the enum is not set. See MESOS-4997.
-  OFFER_OPERATION_UNSUPPORTED = 0;
+  OPERATION_UNSUPPORTED = 0;
 
   // Initial state.
-  OFFER_OPERATION_PENDING = 1;
+  OPERATION_PENDING = 1;
 
-  // The operation was successfully applied.
-  // This state is terminal.
-  OFFER_OPERATION_FINISHED = 2;
+  // TERMINAL: The operation was successfully applied.
+  OPERATION_FINISHED = 2;
 
-  // The operation failed to apply.
-  // This state is terminal.
-  OFFER_OPERATION_FAILED = 3;
+  // TERMINAL: The operation failed to apply.
+  OPERATION_FAILED = 3;
 
-  // The operation description contains an error.
-  OFFER_OPERATION_ERROR = 4;
+  // TERMINAL: The operation description contains an error.
+  OPERATION_ERROR = 4;
+
+  // TERMINAL: The operation was dropped due to a transient error.
+  OPERATION_DROPPED = 5;
 }
 
 
 /**
- * Describes the current status of an offer operation.
+ * Describes the current status of an operation.
  */
-message OfferOperationStatus {
-  optional OfferOperationID operation_id = 1;
-  required OfferOperationState state = 2;
+message OperationStatus {
+  // While frameworks will only receive status updates for operations on which
+  // they have set an ID, this field is optional because this message is also
+  // used internally by Mesos components when the operation's ID has not been
+  // set.
+  optional OperationID operation_id = 1;
+
+  required OperationState state = 2;
   optional string message = 3;
 
   // Converted resources after applying the operation. This only
-  // applies if the `state` is `OFFER_OPERATION_FINISHED`.
+  // applies if the `state` is `OPERATION_FINISHED`.
   repeated Resource converted_resources = 4;
 
   // Statuses that are delivered reliably to the scheduler will
-  // include a `status_uuid`. The status is considered delivered once
+  // include a `uuid`. The status is considered delivered once
   // it is acknowledged by the scheduler.
-  optional bytes status_uuid = 5;
+  optional UUID uuid = 5;
 }
 
 
@@ -2381,6 +2411,7 @@ message TaskStatus {
     REASON_AGENT_DISCONNECTED = 10;
     REASON_AGENT_REMOVED = 11;
     REASON_AGENT_REMOVED_BY_OPERATOR = 31;
+    REASON_AGENT_REREGISTERED = 32;
     REASON_AGENT_RESTARTED = 12;
     REASON_AGENT_UNKNOWN = 13;
     REASON_TASK_KILLED_DURING_LAUNCH = 30;
@@ -2436,7 +2467,7 @@ message TaskStatus {
   // acted upon by Mesos itself. As opposed to the data field, labels
   // will be kept in memory on master and agent processes. Therefore,
   // labels should be used to tag TaskStatus message with light-weight
-  // meta-data.  Labels should not contain duplicate key-value pairs.
+  // meta-data. Labels should not contain duplicate key-value pairs.
   optional Labels labels = 12;
 
   // Container related information that is resolved dynamically such as
