@@ -10,6 +10,7 @@ It is generated from these files:
 It has these top-level messages:
 	QuotaInfo
 	QuotaRequest
+	QuotaConfig
 	QuotaStatus
 */
 package mesos_v1_quota
@@ -30,17 +31,13 @@ var _ = math.Inf
 // proto package needs to be updated.
 const _ = proto.ProtoPackageIsVersion2 // please upgrade the proto package
 
-// TODO(joerg84): Add limits, i.e. upper bounds of resources that a
-// role is allowed to use.
+// *
+// Describes the resource guarantees for a role.
+// Persisted in the registry.
 type QuotaInfo struct {
-	// Quota is granted per role and not per framework, similar to
-	// dynamic reservations.
 	Role *string `protobuf:"bytes,1,opt,name=role" json:"role,omitempty"`
 	// Principal which set the quota. Currently only operators can set quotas.
-	Principal *string `protobuf:"bytes,2,opt,name=principal" json:"principal,omitempty"`
-	// The guarantee that these resources are allocatable for the above role.
-	// NOTE: `guarantee.role` should not specify any role except '*',
-	// because quota does not reserve specific resources.
+	Principal        *string              `protobuf:"bytes,2,opt,name=principal" json:"principal,omitempty"`
 	Guarantee        []*mesos_v1.Resource `protobuf:"bytes,3,rep,name=guarantee" json:"guarantee,omitempty"`
 	XXX_unrecognized []byte               `json:"-"`
 }
@@ -72,14 +69,36 @@ func (m *QuotaInfo) GetGuarantee() []*mesos_v1.Resource {
 }
 
 // *
-// `QuotaRequest` provides a schema for set quota JSON requests.
+// Describes an update to a role's quota. This is a copy of
+// `QuotaInfo` which omits the principal since it is determined
+// during authentication. Also allows the user to force the update
+// in the case of a guarantee overcommit.
 type QuotaRequest struct {
-	// Disables the capacity heuristic check if set to `true`.
-	Force *bool `protobuf:"varint,1,opt,name=force,def=0" json:"force,omitempty"`
-	// The role for which to set quota.
-	Role *string `protobuf:"bytes,2,opt,name=role" json:"role,omitempty"`
-	// The requested guarantee that these resources will be allocatable for
-	// the above role.
+	// See `guarantee` for the behavior of `force`.
+	Force *bool   `protobuf:"varint,1,opt,name=force" json:"force,omitempty"`
+	Role  *string `protobuf:"bytes,2,opt,name=role" json:"role,omitempty"`
+	// Mesos will try its best to ensure that the role can be
+	// allocated at least as many resources as the guarantee.
+	// Despite this, it's possible for the guarantee to not be
+	// satisfiable, if:
+	//   (1) The operator has overcommitted guarantees.
+	//   (2) There is a loss of agents that such that the
+	//       guarantees overcommit the cluster.
+	//   (3) The scheduler is pickier than mesos knows about,
+	//       e.g. the scheduler needs resources from agents
+	//       with specific attributes.
+	//
+	// The provided guarantee will be validated to ensure it
+	// is not overcommitting the cluster. The operator can
+	// disable this via `QuotaRequest.force`.
+	//
+	// If the guarantee is omitted, there is no guarantee.
+	//
+	// Operators may want to set up alerting to let them know
+	// when a guarantee cannot be satisfied.
+	//
+	// NOTE: The resources must be scalars without additional
+	// metadata like reservations, disk information, etc.
 	Guarantee        []*mesos_v1.Resource `protobuf:"bytes,3,rep,name=guarantee" json:"guarantee,omitempty"`
 	XXX_unrecognized []byte               `json:"-"`
 }
@@ -89,13 +108,11 @@ func (m *QuotaRequest) String() string            { return proto.CompactTextStri
 func (*QuotaRequest) ProtoMessage()               {}
 func (*QuotaRequest) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{1} }
 
-const Default_QuotaRequest_Force bool = false
-
 func (m *QuotaRequest) GetForce() bool {
 	if m != nil && m.Force != nil {
 		return *m.Force
 	}
-	return Default_QuotaRequest_Force
+	return false
 }
 
 func (m *QuotaRequest) GetRole() string {
@@ -113,10 +130,87 @@ func (m *QuotaRequest) GetGuarantee() []*mesos_v1.Resource {
 }
 
 // *
-// `QuotaStatus` describes the internal representation for the /quota/status
-// response.
+// Describes a role's quota configuration.
+type QuotaConfig struct {
+	Role *string `protobuf:"bytes,1,req,name=role" json:"role,omitempty"`
+	// Name-value pairs that define the resource guarantees.
+	// Only scalar resources are currently supported.
+	//
+	// Mesos will try its best to ensure that the role can be
+	// allocated at least as many resources as the guarantee.
+	// Despite this, it's possible for the guarantee to not be
+	// satisfiable, if:
+	//   (1) The operator has overcommitted guarantees.
+	//   (2) There is a loss of agents that such that the
+	//       guarantees overcommit the cluster.
+	//   (3) The scheduler is pickier than mesos knows about,
+	//       e.g. the scheduler needs resources from agents
+	//       with specific attributes.
+	//
+	// The provided guarantees will be validated to ensure it
+	// is not overcommitting the cluster. The operator can
+	// disable this via `UpdateQuota.force`.
+	//
+	// If the guarantee is omitted, there is no guarantee.
+	//
+	// Operators may want to set up alerting to let them know
+	// when a guarantee cannot be satisfied.
+	Guarantees map[string]*mesos_v1.Value_Scalar `protobuf:"bytes,2,rep,name=guarantees" json:"guarantees,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Name-value pairs that define the resource limits.
+	// Only scalar resources are currently supported.
+	//
+	// Imposes a limit on the amount of resources allocated to the
+	// role. Mesos will try its best to ensure that the role does
+	// not exceed this limit. Despite this, the limit can be exceeded
+	// when:
+	//   (1) The limit is lowered below the allocation.
+	//   (2) Some agents are partitioned and re-connect with
+	//       resources allocated to the role.
+	//
+	// The provided limits will be validated to ensure it does not
+	// exceed the total cluster size. The operator can disable
+	// this check via `UpdateQuota.force`.
+	//
+	// If the limit is omitted, there is no limit.
+	//
+	// Operators may want to set up alerting to let them know
+	// when the limit is exceeded.
+	Limits           map[string]*mesos_v1.Value_Scalar `protobuf:"bytes,3,rep,name=limits" json:"limits,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	XXX_unrecognized []byte                            `json:"-"`
+}
+
+func (m *QuotaConfig) Reset()                    { *m = QuotaConfig{} }
+func (m *QuotaConfig) String() string            { return proto.CompactTextString(m) }
+func (*QuotaConfig) ProtoMessage()               {}
+func (*QuotaConfig) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{2} }
+
+func (m *QuotaConfig) GetRole() string {
+	if m != nil && m.Role != nil {
+		return *m.Role
+	}
+	return ""
+}
+
+func (m *QuotaConfig) GetGuarantees() map[string]*mesos_v1.Value_Scalar {
+	if m != nil {
+		return m.Guarantees
+	}
+	return nil
+}
+
+func (m *QuotaConfig) GetLimits() map[string]*mesos_v1.Value_Scalar {
+	if m != nil {
+		return m.Limits
+	}
+	return nil
+}
+
+// *
+// `QuotaStatus` describes the internal representation for the
+// /quota/status response and `GET_QUOTA` `master::Response`.
 type QuotaStatus struct {
-	// Quotas which are currently set, i.e. known to the master.
+	// Returns all non-default quotas. Those ommitted from this
+	// list have the default of: no guarantee and no limit.
 	Infos            []*QuotaInfo `protobuf:"bytes,1,rep,name=infos" json:"infos,omitempty"`
 	XXX_unrecognized []byte       `json:"-"`
 }
@@ -124,7 +218,7 @@ type QuotaStatus struct {
 func (m *QuotaStatus) Reset()                    { *m = QuotaStatus{} }
 func (m *QuotaStatus) String() string            { return proto.CompactTextString(m) }
 func (*QuotaStatus) ProtoMessage()               {}
-func (*QuotaStatus) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{2} }
+func (*QuotaStatus) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{3} }
 
 func (m *QuotaStatus) GetInfos() []*QuotaInfo {
 	if m != nil {
@@ -136,26 +230,34 @@ func (m *QuotaStatus) GetInfos() []*QuotaInfo {
 func init() {
 	proto.RegisterType((*QuotaInfo)(nil), "mesos.v1.quota.QuotaInfo")
 	proto.RegisterType((*QuotaRequest)(nil), "mesos.v1.quota.QuotaRequest")
+	proto.RegisterType((*QuotaConfig)(nil), "mesos.v1.quota.QuotaConfig")
 	proto.RegisterType((*QuotaStatus)(nil), "mesos.v1.quota.QuotaStatus")
 }
 
 func init() { proto.RegisterFile("quota.proto", fileDescriptor0) }
 
 var fileDescriptor0 = []byte{
-	// 234 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x94, 0x90, 0x31, 0x4f, 0xc3, 0x30,
-	0x10, 0x85, 0x95, 0x96, 0x20, 0x72, 0x41, 0x0c, 0x16, 0x43, 0x0a, 0x0c, 0x55, 0x59, 0x3a, 0x39,
-	0x94, 0x91, 0x81, 0xa1, 0x1b, 0x1b, 0x98, 0x5f, 0x70, 0x8a, 0x2e, 0x25, 0x52, 0xc8, 0x25, 0x3e,
-	0xbb, 0xbf, 0x1f, 0xf5, 0x22, 0x25, 0xc0, 0xd6, 0xcd, 0x7e, 0xef, 0x9d, 0xbe, 0xa7, 0x07, 0xf9,
-	0x10, 0x39, 0xa0, 0xed, 0x3d, 0x07, 0x36, 0x37, 0xdf, 0x24, 0x2c, 0xf6, 0xb8, 0xb3, 0xaa, 0xde,
-	0xdd, 0xea, 0xbf, 0x3c, 0xee, 0xca, 0xd1, 0xd0, 0xd4, 0x86, 0x21, 0xfb, 0x38, 0xd9, 0x6f, 0x5d,
-	0xcd, 0xc6, 0xc0, 0x85, 0xe7, 0x96, 0x8a, 0x64, 0x9d, 0x6c, 0x33, 0xa7, 0x6f, 0xf3, 0x00, 0x59,
-	0xef, 0x9b, 0xae, 0x6a, 0x7a, 0x6c, 0x8b, 0x85, 0x1a, 0xb3, 0x60, 0x9e, 0x20, 0x3b, 0x44, 0xf4,
-	0xd8, 0x05, 0xa2, 0x62, 0xb9, 0x5e, 0x6e, 0xf3, 0x67, 0x63, 0x27, 0xb0, 0x23, 0xe1, 0xe8, 0x2b,
-	0x72, 0x73, 0x68, 0x33, 0xc0, 0xb5, 0x02, 0x1d, 0x0d, 0x91, 0x24, 0x98, 0x7b, 0x48, 0x6b, 0xf6,
-	0xd5, 0x08, 0xbd, 0x7a, 0x49, 0x6b, 0x6c, 0x85, 0xdc, 0xa8, 0x4d, 0x85, 0x16, 0xbf, 0x0a, 0x9d,
-	0x8f, 0x7c, 0x85, 0x5c, 0x91, 0x9f, 0x01, 0x43, 0x14, 0x53, 0x42, 0xda, 0x74, 0x35, 0x4b, 0x91,
-	0xe8, 0xf1, 0xca, 0xfe, 0x1d, 0xca, 0x4e, 0x7b, 0xb8, 0x31, 0xb7, 0x7f, 0x84, 0x15, 0xfb, 0x83,
-	0xc5, 0x1e, 0xab, 0x2f, 0xfa, 0x97, 0xde, 0x5f, 0xbe, 0x9f, 0x76, 0x94, 0x9f, 0x00, 0x00, 0x00,
-	0xff, 0xff, 0x55, 0x0b, 0x2c, 0x31, 0x7c, 0x01, 0x00, 0x00,
+	// 346 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xac, 0x92, 0x51, 0x4b, 0xc3, 0x30,
+	0x10, 0xc7, 0x69, 0xe7, 0x86, 0xbd, 0x8a, 0x4a, 0x18, 0xd2, 0x0d, 0x1f, 0xc6, 0x7c, 0x70, 0xa0,
+	0x64, 0x6e, 0x4f, 0xe2, 0x83, 0xc2, 0x44, 0x44, 0xf4, 0xc1, 0x65, 0xe8, 0x7b, 0x28, 0xe9, 0xac,
+	0x76, 0xbd, 0x2e, 0x49, 0x07, 0xfb, 0xa8, 0x7e, 0x1b, 0x69, 0x52, 0xba, 0x3a, 0x44, 0x10, 0x7c,
+	0x4b, 0xee, 0xfe, 0xf7, 0xff, 0xdd, 0x5d, 0x02, 0xfe, 0x32, 0x47, 0xcd, 0x69, 0x26, 0x51, 0x23,
+	0xd9, 0x5f, 0x08, 0x85, 0x8a, 0xae, 0x46, 0xd4, 0x44, 0xbb, 0x6d, 0x73, 0x1f, 0xae, 0x46, 0x43,
+	0x9b, 0x30, 0xaa, 0x3e, 0x82, 0x37, 0x2d, 0xd2, 0x0f, 0x69, 0x84, 0x84, 0xc0, 0x8e, 0xc4, 0x44,
+	0x04, 0x4e, 0xcf, 0x19, 0x78, 0xcc, 0x9c, 0xc9, 0x31, 0x78, 0x99, 0x8c, 0xd3, 0x30, 0xce, 0x78,
+	0x12, 0xb8, 0x26, 0xb1, 0x09, 0x90, 0x0b, 0xf0, 0xe6, 0x39, 0x97, 0x3c, 0xd5, 0x42, 0x04, 0x8d,
+	0x5e, 0x63, 0xe0, 0x8f, 0x09, 0xad, 0xc0, 0x4c, 0x28, 0xcc, 0x65, 0x28, 0xd8, 0x46, 0xd4, 0x7f,
+	0x87, 0x3d, 0x03, 0x64, 0x62, 0x99, 0x0b, 0xa5, 0x49, 0x1b, 0x9a, 0x11, 0xca, 0xd0, 0x42, 0x77,
+	0x99, 0xbd, 0x54, 0x9d, 0xb8, 0xb5, 0x4e, 0xfe, 0xce, 0xfa, 0x74, 0xc1, 0x37, 0xb0, 0x5b, 0x4c,
+	0xa3, 0x78, 0x5e, 0x9b, 0xcf, 0xad, 0x5c, 0x1f, 0x01, 0xaa, 0x02, 0x15, 0xb8, 0xc6, 0xf6, 0x8c,
+	0x7e, 0xdf, 0x1d, 0xad, 0x99, 0xd0, 0xfb, 0x4a, 0x7d, 0x97, 0x6a, 0xb9, 0x66, 0xb5, 0x72, 0x72,
+	0x03, 0xad, 0x24, 0x5e, 0xc4, 0x5a, 0x95, 0xfd, 0x9d, 0xfe, 0x66, 0xf4, 0x64, 0x94, 0xd6, 0xa4,
+	0x2c, 0xeb, 0xbe, 0xc0, 0xc1, 0x96, 0x3f, 0x39, 0x84, 0xc6, 0x87, 0x58, 0x97, 0x6f, 0x52, 0x1c,
+	0xc9, 0x39, 0x34, 0x57, 0x3c, 0xc9, 0xed, 0x76, 0xfc, 0xf1, 0xd1, 0x06, 0xf2, 0x5a, 0x84, 0xe9,
+	0x2c, 0xe4, 0x09, 0x97, 0xcc, 0x8a, 0xae, 0xdc, 0x4b, 0xa7, 0x3b, 0x05, 0xbf, 0x46, 0xfb, 0x0f,
+	0xcb, 0xfe, 0x75, 0xb9, 0xda, 0x99, 0xe6, 0x3a, 0x57, 0x64, 0x08, 0xcd, 0x38, 0x8d, 0x50, 0x05,
+	0x8e, 0x19, 0xbc, 0xf3, 0xe3, 0xe0, 0xc5, 0x27, 0x63, 0x56, 0x37, 0x39, 0x81, 0x0e, 0xca, 0x39,
+	0xe5, 0x19, 0x0f, 0xdf, 0xc4, 0x96, 0x7a, 0xd2, 0x7a, 0x2e, 0x3e, 0xa7, 0xfa, 0x0a, 0x00, 0x00,
+	0xff, 0xff, 0x00, 0xff, 0x98, 0x86, 0xd1, 0x02, 0x00, 0x00,
 }
