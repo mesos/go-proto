@@ -315,10 +315,13 @@ message Call {
   //   exists.
   // Returns 400 Bad Request if `info` is not well-formed.
   // Returns 403 Forbidden if the call is not authorized.
-  // Returns 409 Conflict if another config file that describes a
-  //   resource provider of the same type and name exists, but the content is
-  //   not identical.
+  // Returns 409 Conflict if another config file that describes a resource
+  //   provider of the same type and name exists, but the content is not
+  //   identical.
   // Returns 500 Internal Server Error if anything goes wrong.
+  //
+  // NOTE: For the time being, this API is subject to change and the related
+  // feature is experimental.
   message AddResourceProviderConfig {
     required ResourceProviderInfo info = 1;
   }
@@ -339,9 +342,12 @@ message Call {
   //   in the config file.
   // Returns 400 Bad Request if `info` is not well-formed.
   // Returns 403 Forbidden if the call is not authorized.
-  // Returns 404 Not Found if no config file describes a resource
-  //   provider of the same type and name exists.
+  // Returns 409 Conflict if no config file describes a resource provider of the
+  //   same type and name exists.
   // Returns 500 Internal Server Error if anything goes wrong.
+  //
+  // NOTE: For the time being, this API is subject to change and the related
+  // feature is experimental.
   message UpdateResourceProviderConfig {
     required ResourceProviderInfo info = 1;
   }
@@ -360,6 +366,9 @@ message Call {
   //   exists.
   // Returns 403 Forbidden if the call is not authorized.
   // Returns 500 Internal Server Error if anything goes wrong.
+  //
+  // NOTE: For the time being, this API is subject to change and the related
+  // feature is experimental.
   message RemoveResourceProviderConfig {
     required string type = 1;
     required string name = 2;
@@ -560,6 +569,9 @@ message Response {
   // Contains the agent's information.
   message GetAgent {
     optional AgentInfo agent_info = 1;
+
+    optional DrainConfig drain_config = 2;
+    optional TimeInfo estimated_drain_start_time = 3;
   }
 
   // Lists information about all resource providers known to the agent
